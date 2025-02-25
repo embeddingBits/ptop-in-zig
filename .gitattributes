@@ -1,1 +1,2 @@
 *.zig linguist-language=zig
+*.zon linguist-language=zig
