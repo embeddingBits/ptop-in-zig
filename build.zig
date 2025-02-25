@@ -8,7 +8,7 @@ pub fn build(b: *std.Build) void {
     // Create an executable
     const exe = b.addExecutable(.{
         .name = "ptop", // Output binary name
-        .root_source_file = .{ .path = "src/ptop.zig" }, // Path to your main file
+        .root_source_file = .{ .src = "src/ptop.zig" }, // Updated to use .src
         .target = target,
         .optimize = optimize,
     });
