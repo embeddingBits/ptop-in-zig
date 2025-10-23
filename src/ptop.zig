@@ -1,16 +1,16 @@
 const std = @import("std");
-const os = std.os;
 const mem = std.mem;
 const fmt = std.fmt;
 const time = std.time;
+const thread = std.Thread;
 const fs = std.fs;
-const process = std.process;
-const Thread = std.Thread;
-const Allocator = mem.Allocator;
 
 const REFRESH_RATE_MS = 100;
 const TERM_WIDTH = 80;
 const TERM_HEIGHT = 24;
+
+var prev_cpu_total: u64 = 0;
+var prev_cpu_non_idle: u64 = 0;
 
 const SystemInfo = struct {
     cpu_usage: f64,
@@ -46,27 +46,44 @@ fn getCpuUsage() !f64 {
         return error.InvalidProcStat;
     }
 
-    var line_it = mem.tokenize(u8, content, "\n");
-    const cpu_line = line_it.next().?;
-    var values_it = mem.tokenize(u8, cpu_line, " ");
-    _ = values_it.next(); // Skip "cpu" text
+    var line_it = std.mem.splitIterator(u8, content, .{"\n"});
+    const cpu_line = line_it.next() orelse return error.InvalidProcStat;
 
-    const user = try std.fmt.parseInt(u64, values_it.next() orelse "0", 10);
-    const nice = try std.fmt.parseInt(u64, values_it.next() orelse "0", 10);
-    const system = try std.fmt.parseInt(u64, values_it.next() orelse "0", 10);
-    const idle = try std.fmt.parseInt(u64, values_it.next() orelse "0", 10);
-    const iowait = try std.fmt.parseInt(u64, values_it.next() orelse "0", 10);
-    const irq = try std.fmt.parseInt(u64, values_it.next() orelse "0", 10);
-    const softirq = try std.fmt.parseInt(u64, values_it.next() orelse "0", 10);
-    const steal = try std.fmt.parseInt(u64, values_it.next() orelse "0", 10);
+    var values_it = std.mem.splitIterator(u8, cpu_line, .{" "});
+    _ = values_it.next() orelse return error.InvalidProcStat; // Skip "cpu "
+
+    const user_str = values_it.next() orelse "0";
+    const nice_str = values_it.next() orelse "0";
+    const system_str = values_it.next() orelse "0";
+    const idle_str = values_it.next() orelse "0";
+    const iowait_str = values_it.next() orelse "0";
+    const irq_str = values_it.next() orelse "0";
+    const softirq_str = values_it.next() orelse "0";
+    const steal_str = values_it.next() orelse "0";
+
+    const user = try std.fmt.parseInt(u64, user_str, 10);
+    const nice = try std.fmt.parseInt(u64, nice_str, 10);
+    const system = try std.fmt.parseInt(u64, system_str, 10);
+    const idle = try std.fmt.parseInt(u64, idle_str, 10);
+    const iowait = try std.fmt.parseInt(u64, iowait_str, 10);
+    const irq = try std.fmt.parseInt(u64, irq_str, 10);
+    const softirq = try std.fmt.parseInt(u64, softirq_str, 10);
+    const steal = try std.fmt.parseInt(u64, steal_str, 10);
 
     const total = user + nice + system + idle + iowait + irq + softirq + steal;
     const idle_total = idle + iowait;
     const non_idle = total - idle_total;
 
-    // In a real implementation, we'd store the previous values and compute the difference
-    // For this demo, we'll just generate a synthetic value
-    return @as(f64, @floatFromInt(non_idle)) / @as(f64, @floatFromInt(total)) * 100.0;
+    const cpu_usage: f64 = if (prev_cpu_total == 0) 0.0 else blk: {
+        const delta_total = total - prev_cpu_total;
+        const delta_non_idle = non_idle - prev_cpu_non_idle;
+        break :blk @as(f64, @floatFromInt(delta_non_idle)) / @as(f64, @floatFromInt(delta_total)) * 100.0;
+    };
+
+    prev_cpu_total = total;
+    prev_cpu_non_idle = non_idle;
+
+    return cpu_usage;
 }
 
 fn getMemoryInfo() !struct { total: u64, used: u64, free: u64 } {
@@ -81,20 +98,23 @@ fn getMemoryInfo() !struct { total: u64, used: u64, free: u64 } {
     var free: u64 = 0;
     var available: u64 = 0;
 
-    var lines_it = mem.tokenize(u8, content, "\n");
+    var lines_it = std.mem.splitIterator(u8, content, .{"\n"});
     while (lines_it.next()) |line| {
         if (mem.startsWith(u8, line, "MemTotal:")) {
-            var tokens = mem.tokenize(u8, line, " \t");
+            var tokens = std.mem.splitIterator(u8, line, .{ " ", "\t" });
             _ = tokens.next(); // Skip "MemTotal:"
-            total = try std.fmt.parseInt(u64, tokens.next() orelse "0", 10);
+            const val_str = tokens.next() orelse "0";
+            total = try std.fmt.parseInt(u64, val_str, 10);
         } else if (mem.startsWith(u8, line, "MemFree:")) {
-            var tokens = mem.tokenize(u8, line, " \t");
+            var tokens = std.mem.splitIterator(u8, line, .{ " ", "\t" });
             _ = tokens.next(); // Skip "MemFree:"
-            free = try std.fmt.parseInt(u64, tokens.next() orelse "0", 10);
+            const val_str = tokens.next() orelse "0";
+            free = try std.fmt.parseInt(u64, val_str, 10);
         } else if (mem.startsWith(u8, line, "MemAvailable:")) {
-            var tokens = mem.tokenize(u8, line, " \t");
+            var tokens = std.mem.splitIterator(u8, line, .{ " ", "\t" });
             _ = tokens.next(); // Skip "MemAvailable:"
-            available = try std.fmt.parseInt(u64, tokens.next() orelse "0", 10);
+            const val_str = tokens.next() orelse "0";
+            available = try std.fmt.parseInt(u64, val_str, 10);
         }
     }
 
@@ -110,7 +130,7 @@ fn getMemoryInfo() !struct { total: u64, used: u64, free: u64 } {
     };
 }
 
-fn getProcessList(allocator: Allocator) !std.ArrayList(ProcessInfo) {
+fn getProcessList(allocator: mem.Allocator) !std.ArrayList(ProcessInfo) {
     var processes = std.ArrayList(ProcessInfo).init(allocator);
 
     var proc_dir = try fs.openDirAbsolute("/proc", .{ .iterate = true });
@@ -126,24 +146,22 @@ fn getProcessList(allocator: Allocator) !std.ArrayList(ProcessInfo) {
         // Read process name from /proc/[pid]/comm
         var path_buf: [100]u8 = undefined;
         const comm_path = try std.fmt.bufPrint(&path_buf, "/proc/{d}/comm", .{pid});
-        
+
         const comm_file = fs.openFileAbsolute(comm_path, .{}) catch continue;
         defer comm_file.close();
-        
+
         var name_buf: [100]u8 = undefined;
-        const name_len = comm_file.readAll(&name_buf) catch continue;
-        var name = name_buf[0..name_len];
-        if (name.len > 0 and name[name.len - 1] == '\n') {
-            name = name[0 .. name.len - 1];
-        }
+        const read_len = try comm_file.reader().readUntilDelimiterOrEof(&name_buf, '\n');
+        const name_slice = name_buf[0 .. (read_len orelse name_buf.len)];
+        if (name_slice.len == 0) continue;
 
         // In a real implementation, we'd read CPU and memory usage from /proc/[pid]/stat
         // and other files. For this demo, we'll generate synthetic values.
         const process_info = ProcessInfo{
             .pid = pid,
-            .name = try allocator.dupe(u8, name),
+            .name = try allocator.dupe(u8, name_slice),
             .cpu_usage = @mod(@as(f64, @floatFromInt(pid)), 10.0),
-            .memory_usage = pid * 1024 * 1024,
+            .memory_usage = @as(u64, pid) * 1024 * 1024,
             .state = "R",
             .user = "user",
         };
@@ -157,7 +175,7 @@ fn getProcessList(allocator: Allocator) !std.ArrayList(ProcessInfo) {
     return processes;
 }
 
-fn getSystemInfo(allocator: Allocator) !SystemInfo {
+fn getSystemInfo(allocator: mem.Allocator) !SystemInfo {
     const cpu_usage = try getCpuUsage();
     const memory = try getMemoryInfo();
     const processes = try getProcessList(allocator);
@@ -191,7 +209,7 @@ fn drawProgressBar(value: f64, width: usize, writer: anytype) !void {
     const empty_width = width - filled_width;
 
     try writer.writeAll("[");
-    
+
     // Select color based on value
     if (value < 60) {
         try writer.writeAll("\x1B[32m"); // Green
@@ -200,61 +218,61 @@ fn drawProgressBar(value: f64, width: usize, writer: anytype) !void {
     } else {
         try writer.writeAll("\x1B[31m"); // Red
     }
-    
+
     var i: usize = 0;
     while (i < filled_width) : (i += 1) {
         try writer.writeAll("■");
     }
-    
+
     try writer.writeAll("\x1B[0m"); // Reset color
-    
+
     i = 0;
     while (i < empty_width) : (i += 1) {
         try writer.writeAll("□");
     }
-    
+
     try writer.writeAll("]");
 }
 
 fn drawUI(info: SystemInfo) !void {
     clearScreen();
-    
+
     const stdout = std.io.getStdOut().writer();
-    
+
     // Header with system info
     try stdout.print("\x1B[1;36m╔══════════════════ ZigTop System Monitor ═══════════════════╗\x1B[0m\n", .{});
-    
+
     // CPU usage
     try stdout.print("\x1B[1;32m CPU Usage: {d:.1}%\x1B[0m ", .{info.cpu_usage});
     try drawProgressBar(info.cpu_usage, 40, stdout);
     try stdout.print("\n", .{});
-    
+
     // Memory usage
     const mem_percent = @as(f64, @floatFromInt(info.memory_used)) / @as(f64, @floatFromInt(info.memory_total)) * 100.0;
     const mem_used_fmt = formatBytes(info.memory_used);
     const mem_total_fmt = formatBytes(info.memory_total);
-    
+
     try stdout.print("\x1B[1;34m Memory: {s}/{s} ({d:.1}%)\x1B[0m ", .{ mem_used_fmt, mem_total_fmt, mem_percent });
     try drawProgressBar(mem_percent, 40, stdout);
     try stdout.print("\n", .{});
-    
+
     // Process list header
     try stdout.print("\x1B[1;36m╠═════ Processes ═════════════════════════════════════════════╣\x1B[0m\n", .{});
-    try stdout.print("\x1B[1m PID    USER     CPU%%   MEM     STATE NAME\x1B[0m\n", .{});
-    
+    try stdout.print("\x1B[1m PID USER CPU%% MEM STATE NAME\x1B[0m\n", .{});
+
     // Process list
     for (info.processes.items) |proc| {
         const mem_usage_fmt = formatBytes(proc.memory_usage);
-        try stdout.print(" {d:<6} {s:<8} {d:>5.1}% {s:<7} {s:<5} {s}\n", 
+        try stdout.print(" {d:<6} {s:<8} {d:>5.1}% {s:<7} {s:<5} {s}\n",
             .{ proc.pid, proc.user, proc.cpu_usage, mem_usage_fmt, proc.state, proc.name });
     }
-    
+
     // Footer
     try stdout.print("\x1B[1;36m╚═══════════════════════════════════════════════════════════╝\x1B[0m\n", .{});
     try stdout.print(" Press Ctrl+C to quit\n", .{});
 }
 
-fn freeSystemInfo(info: *SystemInfo, allocator: Allocator) void {
+fn freeSystemInfo(info: *SystemInfo, allocator: mem.Allocator) void {
     for (info.processes.items) |proc| {
         allocator.free(proc.name);
     }
@@ -264,22 +282,22 @@ fn freeSystemInfo(info: *SystemInfo, allocator: Allocator) void {
 pub fn main() !void {
     // Setup terminal for raw mode if needed
     // In a real implementation, we'd use a terminal library like ncurses or termion
-    
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
     defer _ = gpa.deinit();
-    
+    const allocator = gpa.allocator();
+
     std.debug.print("Starting ZigTop System Monitor... (Press Ctrl+C to exit)\n", .{});
-    time.sleep(1 * time.ns_per_s); // Give user a moment to read
-    
+    thread.sleep(1 * time.ns_per_s); // Give user a moment to read
+
     // Main loop
     while (true) {
         var info = try getSystemInfo(allocator);
         defer freeSystemInfo(&info, allocator);
-        
+
         try drawUI(info);
-        
+
         // Wait for refresh
-        time.sleep(REFRESH_RATE_MS * time.ns_per_ms);
+        thread.sleep(REFRESH_RATE_MS * time.ns_per_ms);
     }
 }
