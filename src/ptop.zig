@@ -50,7 +50,7 @@ fn getCpuUsage() !f64 {
     const cpu_line = line_it.next() orelse return error.InvalidProcStat;
 
     var values_it = std.mem.splitIterator(u8, cpu_line, .{" "});
-    _ = values_it.next() orelse return error.InvalidProcStat; // Skip "cpu "
+    _ = values_it.next() orelse return error.InvalidProcStat; 
 
     const user_str = values_it.next() orelse "0";
     const nice_str = values_it.next() orelse "0";
@@ -102,30 +102,29 @@ fn getMemoryInfo() !struct { total: u64, used: u64, free: u64 } {
     while (lines_it.next()) |line| {
         if (mem.startsWith(u8, line, "MemTotal:")) {
             var tokens = std.mem.splitIterator(u8, line, .{ " ", "\t" });
-            _ = tokens.next(); // Skip "MemTotal:"
+            _ = tokens.next(); 
             const val_str = tokens.next() orelse "0";
             total = try std.fmt.parseInt(u64, val_str, 10);
         } else if (mem.startsWith(u8, line, "MemFree:")) {
             var tokens = std.mem.splitIterator(u8, line, .{ " ", "\t" });
-            _ = tokens.next(); // Skip "MemFree:"
+            _ = tokens.next(); 
             const val_str = tokens.next() orelse "0";
             free = try std.fmt.parseInt(u64, val_str, 10);
         } else if (mem.startsWith(u8, line, "MemAvailable:")) {
             var tokens = std.mem.splitIterator(u8, line, .{ " ", "\t" });
-            _ = tokens.next(); // Skip "MemAvailable:"
+            _ = tokens.next(); 
             const val_str = tokens.next() orelse "0";
             available = try std.fmt.parseInt(u64, val_str, 10);
         }
     }
 
-    // Convert from KB to bytes
     total *= 1024;
     free *= 1024;
     available *= 1024;
 
     return .{
         .total = total,
-        .free = available, // Use available as "free" since it's more representative
+        .free = available, // Use available as "free" since its more representative
         .used = total - available,
     };
 }
@@ -140,10 +139,8 @@ fn getProcessList(allocator: mem.Allocator) !std.ArrayList(ProcessInfo) {
     while (try iter.next()) |entry| {
         if (entry.kind != .directory) continue;
 
-        // Check if directory name is a number (PID)
         const pid = std.fmt.parseInt(u32, entry.name, 10) catch continue;
 
-        // Read process name from /proc/[pid]/comm
         var path_buf: [100]u8 = undefined;
         const comm_path = try std.fmt.bufPrint(&path_buf, "/proc/{d}/comm", .{pid});
 
@@ -155,8 +152,6 @@ fn getProcessList(allocator: mem.Allocator) !std.ArrayList(ProcessInfo) {
         const name_slice = name_buf[0 .. (read_len orelse name_buf.len)];
         if (name_slice.len == 0) continue;
 
-        // In a real implementation, we'd read CPU and memory usage from /proc/[pid]/stat
-        // and other files. For this demo, we'll generate synthetic values.
         const process_info = ProcessInfo{
             .pid = pid,
             .name = try allocator.dupe(u8, name_slice),
@@ -168,7 +163,6 @@ fn getProcessList(allocator: mem.Allocator) !std.ArrayList(ProcessInfo) {
 
         try processes.append(process_info);
 
-        // Limit to 20 processes for the demo
         if (processes.items.len >= 20) break;
     }
 
@@ -210,7 +204,6 @@ fn drawProgressBar(value: f64, width: usize, writer: anytype) !void {
 
     try writer.writeAll("[");
 
-    // Select color based on value
     if (value < 60) {
         try writer.writeAll("\x1B[32m"); // Green
     } else if (value < 85) {
@@ -239,15 +232,12 @@ fn drawUI(info: SystemInfo) !void {
 
     const stdout = std.io.getStdOut().writer();
 
-    // Header with system info
     try stdout.print("\x1B[1;36m╔══════════════════ ZigTop System Monitor ═══════════════════╗\x1B[0m\n", .{});
 
-    // CPU usage
     try stdout.print("\x1B[1;32m CPU Usage: {d:.1}%\x1B[0m ", .{info.cpu_usage});
     try drawProgressBar(info.cpu_usage, 40, stdout);
     try stdout.print("\n", .{});
 
-    // Memory usage
     const mem_percent = @as(f64, @floatFromInt(info.memory_used)) / @as(f64, @floatFromInt(info.memory_total)) * 100.0;
     const mem_used_fmt = formatBytes(info.memory_used);
     const mem_total_fmt = formatBytes(info.memory_total);
@@ -256,18 +246,15 @@ fn drawUI(info: SystemInfo) !void {
     try drawProgressBar(mem_percent, 40, stdout);
     try stdout.print("\n", .{});
 
-    // Process list header
     try stdout.print("\x1B[1;36m╠═════ Processes ═════════════════════════════════════════════╣\x1B[0m\n", .{});
     try stdout.print("\x1B[1m PID USER CPU%% MEM STATE NAME\x1B[0m\n", .{});
 
-    // Process list
     for (info.processes.items) |proc| {
         const mem_usage_fmt = formatBytes(proc.memory_usage);
         try stdout.print(" {d:<6} {s:<8} {d:>5.1}% {s:<7} {s:<5} {s}\n",
             .{ proc.pid, proc.user, proc.cpu_usage, mem_usage_fmt, proc.state, proc.name });
     }
 
-    // Footer
     try stdout.print("\x1B[1;36m╚═══════════════════════════════════════════════════════════╝\x1B[0m\n", .{});
     try stdout.print(" Press Ctrl+C to quit\n", .{});
 }
@@ -280,24 +267,20 @@ fn freeSystemInfo(info: *SystemInfo, allocator: mem.Allocator) void {
 }
 
 pub fn main() !void {
-    // Setup terminal for raw mode if needed
-    // In a real implementation, we'd use a terminal library like ncurses or termion
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     std.debug.print("Starting ZigTop System Monitor... (Press Ctrl+C to exit)\n", .{});
-    thread.sleep(1 * time.ns_per_s); // Give user a moment to read
+    thread.sleep(1 * time.ns_per_s); 
 
-    // Main loop
     while (true) {
         var info = try getSystemInfo(allocator);
         defer freeSystemInfo(&info, allocator);
 
         try drawUI(info);
 
-        // Wait for refresh
         thread.sleep(REFRESH_RATE_MS * time.ns_per_ms);
     }
 }
